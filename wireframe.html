@@ -1,0 +1,338 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Wireframe OBJ — Renderizador 3D</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<nav class="navbar">
+  <a href="index.html" class="brand">&#9650; Renderizador 3D</a>
+  <a href="wireframe.html" class="active">Wireframe OBJ</a>
+  <a href="primitivos.html">Primitivos</a>
+  <a href="iluminacao.html">Iluminação</a>
+  <a href="particulas.html">Partículas</a>
+  <a href="animacao.html">Animação</a>
+</nav>
+
+<!-- Painel de controles -->
+<div class="panel" style="top:62px; left:16px; width:220px;">
+  <h3>Controles</h3>
+
+  <label>Modelo pré-definido</label>
+  <select id="presetSelect">
+    <option value="pav">Pavão (pav.obj)</option>
+    <option value="custom">Carregar arquivo...</option>
+  </select>
+
+  <input type="file" id="fileInput" accept=".obj" style="display:none">
+
+  <label>Cor das arestas</label>
+  <select id="colorMode">
+    <option value="rainbow">Arco-íris animado</option>
+    <option value="solid">Cor sólida</option>
+    <option value="depth">Profundidade</option>
+  </select>
+
+  <div id="solidColorRow" style="display:none">
+    <label>Cor</label>
+    <input type="color" id="solidColor" value="#00e5ff">
+  </div>
+
+  <label>Espessura da linha</label>
+  <input type="range" id="lineWidth" min="0.1" max="3" step="0.1" value="0.5">
+
+  <label>Zoom: <span id="zoomVal">1.0</span>x</label>
+  <input type="range" id="zoomSlider" min="0.2" max="5" step="0.05" value="1">
+
+  <button id="resetBtn">&#8635; Resetar câmera</button>
+  <button id="autoRotBtn" class="secondary">&#9654; Auto-rotação</button>
+</div>
+
+<!-- Stats -->
+<div class="stats">
+  Vértices: <span id="statVerts">0</span><br>
+  Faces: <span id="statFaces">0</span><br>
+  FPS: <span id="statFps">0</span>
+</div>
+
+<div class="canvas-wrap">
+  <canvas id="canvas"></canvas>
+</div>
+
+<div class="badge">Arraste para rotacionar &nbsp;|&nbsp; Scroll para zoom &nbsp;|&nbsp; Duplo-clique para resetar</div>
+
+<script>
+// ===== CANVAS SETUP =====
+const canvas = document.getElementById("canvas");
+const ctx = canvas.getContext("2d");
+
+function resize() {
+  canvas.width = canvas.parentElement.clientWidth;
+  canvas.height = canvas.parentElement.clientHeight;
+}
+resize();
+window.addEventListener("resize", resize);
+
+// ===== STATE =====
+let vertices = [], faces = [];
+let rotX = 0.3, rotY = 0.5;
+let zoom = 1;
+let dragging = false, lastX = 0, lastY = 0;
+let autoRotate = false;
+let hue = 0;
+let fps = 0, lastTime = performance.now(), frameCount = 0;
+
+// ===== CONTROLS =====
+const presetSelect = document.getElementById("presetSelect");
+const fileInput    = document.getElementById("fileInput");
+const colorModeEl  = document.getElementById("colorMode");
+const solidColorEl = document.getElementById("solidColor");
+const solidRow     = document.getElementById("solidColorRow");
+const lineWidthEl  = document.getElementById("lineWidth");
+const zoomSlider   = document.getElementById("zoomSlider");
+const zoomVal      = document.getElementById("zoomVal");
+const resetBtn     = document.getElementById("resetBtn");
+const autoRotBtn   = document.getElementById("autoRotBtn");
+
+presetSelect.addEventListener("change", () => {
+  if (presetSelect.value === "custom") {
+    fileInput.click();
+  } else {
+    loadPreset(presetSelect.value);
+  }
+});
+
+fileInput.addEventListener("change", e => {
+  const file = e.target.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = ev => loadOBJ(ev.target.result);
+  reader.readAsText(file);
+});
+
+colorModeEl.addEventListener("change", () => {
+  solidRow.style.display = colorModeEl.value === "solid" ? "block" : "none";
+});
+
+zoomSlider.addEventListener("input", () => {
+  zoom = parseFloat(zoomSlider.value);
+  zoomVal.textContent = zoom.toFixed(2);
+});
+
+resetBtn.addEventListener("click", () => {
+  rotX = 0.3; rotY = 0.5; zoom = 1;
+  zoomSlider.value = 1;
+  zoomVal.textContent = "1.00";
+});
+
+autoRotBtn.addEventListener("click", () => {
+  autoRotate = !autoRotate;
+  autoRotBtn.textContent = autoRotate ? "⏹ Parar rotação" : "▶ Auto-rotação";
+  autoRotBtn.style.background = autoRotate ? "var(--accent)" : "";
+  autoRotBtn.style.color = autoRotate ? "#fff" : "";
+});
+
+// ===== MOUSE =====
+canvas.addEventListener("mousedown", e => {
+  dragging = true; lastX = e.clientX; lastY = e.clientY;
+});
+window.addEventListener("mouseup", () => { dragging = false; });
+window.addEventListener("mousemove", e => {
+  if (!dragging) return;
+  rotY += (e.clientX - lastX) * 0.01;
+  rotX += (e.clientY - lastY) * 0.01;
+  lastX = e.clientX; lastY = e.clientY;
+});
+canvas.addEventListener("wheel", e => {
+  e.preventDefault();
+  zoom *= e.deltaY > 0 ? 0.95 : 1.05;
+  zoom = Math.max(0.2, Math.min(5, zoom));
+  zoomSlider.value = zoom;
+  zoomVal.textContent = zoom.toFixed(2);
+}, { passive: false });
+canvas.addEventListener("dblclick", () => {
+  rotX = 0.3; rotY = 0.5; zoom = 1;
+  zoomSlider.value = 1; zoomVal.textContent = "1.00";
+});
+
+// Touch support
+let lastTouchDist = 0;
+canvas.addEventListener("touchstart", e => {
+  if (e.touches.length === 1) {
+    dragging = true;
+    lastX = e.touches[0].clientX;
+    lastY = e.touches[0].clientY;
+  } else if (e.touches.length === 2) {
+    lastTouchDist = Math.hypot(
+      e.touches[0].clientX - e.touches[1].clientX,
+      e.touches[0].clientY - e.touches[1].clientY
+    );
+  }
+}, { passive: true });
+canvas.addEventListener("touchend", () => { dragging = false; }, { passive: true });
+canvas.addEventListener("touchmove", e => {
+  e.preventDefault();
+  if (e.touches.length === 1 && dragging) {
+    rotY += (e.touches[0].clientX - lastX) * 0.012;
+    rotX += (e.touches[0].clientY - lastY) * 0.012;
+    lastX = e.touches[0].clientX;
+    lastY = e.touches[0].clientY;
+  } else if (e.touches.length === 2) {
+    const dist = Math.hypot(
+      e.touches[0].clientX - e.touches[1].clientX,
+      e.touches[0].clientY - e.touches[1].clientY
+    );
+    zoom *= dist / lastTouchDist;
+    zoom = Math.max(0.2, Math.min(5, zoom));
+    lastTouchDist = dist;
+  }
+}, { passive: false });
+
+// ===== OBJ LOADER =====
+async function loadPreset(name) {
+  const url = `https://raw.githubusercontent.com/Ezequias-Rodrigues/Renderizador3D/refs/heads/main/${name}.obj`;
+  try {
+    const text = await fetch(url).then(r => r.text());
+    loadOBJ(text);
+  } catch(e) {
+    alert("Erro ao carregar modelo: " + e.message);
+  }
+}
+
+function loadOBJ(text) {
+  vertices = []; faces = [];
+  for (let line of text.split("\n")) {
+    line = line.trim();
+    if (line.startsWith("v ")) {
+      const p = line.split(/\s+/);
+      vertices.push({ x: parseFloat(p[1]), y: parseFloat(p[2]), z: parseFloat(p[3]) });
+    } else if (line.startsWith("f ")) {
+      const p = line.split(/\s+/).slice(1);
+      faces.push(p.map(x => parseInt(x.split("/")[0]) - 1));
+    }
+  }
+  normalizeModel();
+  document.getElementById("statVerts").textContent = vertices.length;
+  document.getElementById("statFaces").textContent = faces.length;
+}
+
+function normalizeModel() {
+  if (!vertices.length) return;
+  let mn = { x:Infinity, y:Infinity, z:Infinity };
+  let mx = { x:-Infinity, y:-Infinity, z:-Infinity };
+  for (const v of vertices) {
+    mn.x = Math.min(mn.x, v.x); mn.y = Math.min(mn.y, v.y); mn.z = Math.min(mn.z, v.z);
+    mx.x = Math.max(mx.x, v.x); mx.y = Math.max(mx.y, v.y); mx.z = Math.max(mx.z, v.z);
+  }
+  const cx = (mn.x+mx.x)/2, cy = (mn.y+mx.y)/2, cz = (mn.z+mx.z)/2;
+  const size = Math.max(mx.x-mn.x, mx.y-mn.y, mx.z-mn.z);
+  for (const v of vertices) {
+    v.x = (v.x-cx)/size*2;
+    v.y = (v.y-cy)/size*2;
+    v.z = (v.z-cz)/size*2;
+  }
+}
+
+// ===== MATH =====
+function rotateVertex(v) {
+  let { x, y, z } = v;
+  // X rotation
+  const cosX = Math.cos(rotX), sinX = Math.sin(rotX);
+  let y1 = y*cosX - z*sinX, z1 = y*sinX + z*cosX;
+  // Y rotation
+  const cosY = Math.cos(rotY), sinY = Math.sin(rotY);
+  let x1 = x*cosY + z1*sinY, z2 = -x*sinY + z1*cosY;
+  return { x: x1, y: y1, z: z2 };
+}
+
+function project(v) {
+  const d = 4;
+  const s = d / (d - v.z) * 300 * zoom;
+  return {
+    x: v.x * s + canvas.width / 2,
+    y: -v.y * s + canvas.height / 2,
+    z: v.z
+  };
+}
+
+function hsvToHex(h, s, v) {
+  s /= 100; v /= 100;
+  const f = n => {
+    const k = (n + h/60) % 6;
+    return Math.round((v - v*s*Math.max(0, Math.min(k, 4-k, 1)))*255).toString(16).padStart(2,"0");
+  };
+  return `#${f(5)}${f(3)}${f(1)}`;
+}
+
+// ===== RENDER =====
+function render(ts) {
+  // FPS
+  frameCount++;
+  if (ts - lastTime >= 1000) {
+    fps = frameCount;
+    frameCount = 0;
+    lastTime = ts;
+    document.getElementById("statFps").textContent = fps;
+  }
+
+  if (autoRotate) rotY += 0.008;
+
+  ctx.fillStyle = "#0d0d0f";
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+  if (!vertices.length) {
+    ctx.fillStyle = "#94a3b8";
+    ctx.font = "16px 'Segoe UI', sans-serif";
+    ctx.textAlign = "center";
+    ctx.fillText("Carregando modelo...", canvas.width/2, canvas.height/2);
+    requestAnimationFrame(render);
+    return;
+  }
+
+  const mode = colorModeEl.value;
+  const lw = parseFloat(lineWidthEl.value);
+  ctx.lineWidth = lw;
+
+  const transformed = vertices.map(v => project(rotateVertex(v)));
+
+  hue = (hue + 0.5) % 360;
+
+  for (const face of faces) {
+    if (mode === "rainbow") {
+      ctx.strokeStyle = hsvToHex(hue, 100, 100);
+    } else if (mode === "solid") {
+      ctx.strokeStyle = solidColorEl.value;
+    } else {
+      // depth: average z of face
+      let avgZ = 0;
+      for (const i of face) avgZ += transformed[i].z;
+      avgZ /= face.length;
+      const t = (avgZ + 1) / 2;
+      const r = Math.round(t * 0 + (1-t) * 0);
+      const g = Math.round(t * 200 + (1-t) * 50);
+      const b = Math.round(t * 255 + (1-t) * 100);
+      ctx.strokeStyle = `rgb(${r},${g},${b})`;
+    }
+
+    ctx.beginPath();
+    for (let i = 0; i < face.length; i++) {
+      const p = transformed[face[i]];
+      if (!p) continue;
+      i === 0 ? ctx.moveTo(p.x, p.y) : ctx.lineTo(p.x, p.y);
+    }
+    if (transformed[face[0]]) ctx.lineTo(transformed[face[0]].x, transformed[face[0]].y);
+    ctx.stroke();
+  }
+
+  requestAnimationFrame(render);
+}
+
+// ===== INIT =====
+loadPreset("pav");
+requestAnimationFrame(render);
+</script>
+</body>
+</html>

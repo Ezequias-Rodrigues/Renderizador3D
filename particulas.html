@@ -1,0 +1,361 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Partículas 3D — Renderizador 3D</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<nav class="navbar">
+  <a href="index.html" class="brand">&#9650; Renderizador 3D</a>
+  <a href="wireframe.html">Wireframe OBJ</a>
+  <a href="primitivos.html">Primitivos</a>
+  <a href="iluminacao.html">Iluminação</a>
+  <a href="particulas.html" class="active">Partículas</a>
+  <a href="animacao.html">Animação</a>
+</nav>
+
+<div class="panel" style="top:62px; left:16px; width:220px;">
+  <h3>Partículas 3D</h3>
+
+  <label>Modo</label>
+  <select id="modeSelect">
+    <option value="fountain">Fonte</option>
+    <option value="explosion">Explosão</option>
+    <option value="galaxy">Galáxia</option>
+    <option value="rain">Chuva</option>
+    <option value="vortex">Vórtice</option>
+  </select>
+
+  <label>Quantidade: <span id="countVal">400</span></label>
+  <input type="range" id="countSlider" min="50" max="1500" step="50" value="400">
+
+  <label>Gravidade: <span id="gravVal">0.003</span></label>
+  <input type="range" id="gravSlider" min="0" max="0.02" step="0.001" value="0.003">
+
+  <label>Velocidade: <span id="speedVal">1.0</span></label>
+  <input type="range" id="speedSlider" min="0.1" max="3" step="0.1" value="1">
+
+  <label>Tamanho: <span id="sizeVal">2.0</span></label>
+  <input type="range" id="sizeSlider" min="0.5" max="8" step="0.5" value="2">
+
+  <label>Rastro: <span id="trailVal">0.15</span></label>
+  <input type="range" id="trailSlider" min="0.01" max="0.5" step="0.01" value="0.15">
+
+  <label>Paleta de cores</label>
+  <select id="paletteSelect">
+    <option value="fire">Fogo</option>
+    <option value="ice">Gelo</option>
+    <option value="rainbow">Arco-íris</option>
+    <option value="neon">Neon</option>
+    <option value="gold">Dourado</option>
+  </select>
+
+  <button id="explodeBtn">&#128165; Explodir!</button>
+  <button id="resetBtn" class="secondary">&#8635; Reiniciar</button>
+</div>
+
+<div class="stats">
+  Partículas: <span id="statParts">0</span><br>
+  Vivas: <span id="statAlive">0</span><br>
+  FPS: <span id="statFps">0</span>
+</div>
+
+<div class="canvas-wrap">
+  <canvas id="canvas"></canvas>
+</div>
+
+<div class="badge">Clique na cena para criar explosão &nbsp;|&nbsp; Arraste para rotacionar a câmera</div>
+
+<script>
+const canvas = document.getElementById("canvas");
+const ctx = canvas.getContext("2d");
+
+function resize() {
+  canvas.width = canvas.parentElement.clientWidth;
+  canvas.height = canvas.parentElement.clientHeight;
+}
+resize();
+window.addEventListener("resize", resize);
+
+let rotX = 0.3, rotY = 0;
+let dragging = false, lastX = 0, lastY = 0;
+let fps = 0, lastTime = performance.now(), frameCount = 0;
+let particles = [];
+let time = 0;
+
+const modeSelect    = document.getElementById("modeSelect");
+const countSlider   = document.getElementById("countSlider");
+const gravSlider    = document.getElementById("gravSlider");
+const speedSlider   = document.getElementById("speedSlider");
+const sizeSlider    = document.getElementById("sizeSlider");
+const trailSlider   = document.getElementById("trailSlider");
+const paletteSelect = document.getElementById("paletteSelect");
+const explodeBtn    = document.getElementById("explodeBtn");
+const resetBtn      = document.getElementById("resetBtn");
+
+function bindSlider(el, spanId, decimals=2) {
+  el.addEventListener("input", () => {
+    document.getElementById(spanId).textContent = parseFloat(el.value).toFixed(decimals);
+  });
+}
+bindSlider(countSlider, "countVal", 0);
+bindSlider(gravSlider,  "gravVal",  3);
+bindSlider(speedSlider, "speedVal", 1);
+bindSlider(sizeSlider,  "sizeVal",  1);
+bindSlider(trailSlider, "trailVal", 2);
+
+modeSelect.addEventListener("change", resetParticles);
+countSlider.addEventListener("change", resetParticles);
+resetBtn.addEventListener("click", resetParticles);
+explodeBtn.addEventListener("click", () => createExplosion(0, 0, 0, 200));
+
+canvas.addEventListener("mousedown", e => {
+  dragging = true; lastX = e.clientX; lastY = e.clientY;
+});
+window.addEventListener("mouseup", () => { dragging = false; });
+window.addEventListener("mousemove", e => {
+  if (!dragging) return;
+  rotY += (e.clientX - lastX) * 0.01;
+  rotX += (e.clientY - lastY) * 0.01;
+  rotX = Math.max(-Math.PI/2, Math.min(Math.PI/2, rotX));
+  lastX = e.clientX; lastY = e.clientY;
+});
+
+canvas.addEventListener("click", e => {
+  if (Math.abs(e.clientX - lastX) < 5 && Math.abs(e.clientY - lastY) < 5) {
+    createExplosion(
+      (Math.random()-0.5)*2,
+      (Math.random()-0.5)*2,
+      (Math.random()-0.5)*2,
+      80
+    );
+  }
+});
+
+// ===== PALETTES =====
+const palettes = {
+  fire:    [[255,80,0],[255,160,0],[255,220,50],[255,255,200]],
+  ice:     [[0,200,255],[100,230,255],[200,240,255],[255,255,255]],
+  rainbow: [[255,0,0],[255,165,0],[255,255,0],[0,255,0],[0,0,255],[148,0,211]],
+  neon:    [[255,0,255],[0,255,255],[255,255,0],[0,255,128]],
+  gold:    [[255,200,0],[255,165,0],[200,100,0],[255,240,150]]
+};
+
+function getColor(life, maxLife) {
+  const pal = palettes[paletteSelect.value];
+  const t = 1 - (life / maxLife);
+  const idx = Math.floor(t * (pal.length-1));
+  const frac = t * (pal.length-1) - idx;
+  const c0 = pal[Math.min(idx, pal.length-1)];
+  const c1 = pal[Math.min(idx+1, pal.length-1)];
+  const r = Math.round(c0[0]*(1-frac)+c1[0]*frac);
+  const g = Math.round(c0[1]*(1-frac)+c1[1]*frac);
+  const b = Math.round(c0[2]*(1-frac)+c1[2]*frac);
+  const a = Math.max(0, life/maxLife);
+  return `rgba(${r},${g},${b},${a})`;
+}
+
+// ===== PARTICLE CLASS =====
+class Particle {
+  constructor(x, y, z, vx, vy, vz, life, size) {
+    this.x=x; this.y=y; this.z=z;
+    this.vx=vx; this.vy=vy; this.vz=vz;
+    this.life=life; this.maxLife=life;
+    this.size=size;
+  }
+  update(grav, speed) {
+    this.vy -= grav;
+    this.x += this.vx * speed;
+    this.y += this.vy * speed;
+    this.z += this.vz * speed;
+    // Bounce on floor
+    if (this.y < -1.5) {
+      this.y = -1.5;
+      this.vy *= -0.4;
+      this.vx *= 0.85;
+      this.vz *= 0.85;
+    }
+    this.life--;
+  }
+  get alive() { return this.life > 0; }
+}
+
+// ===== PARTICLE EMITTERS =====
+function createFountain(count) {
+  const sp = parseFloat(speedSlider.value) * 0.03;
+  const sz = parseFloat(sizeSlider.value);
+  for (let i=0; i<count; i++) {
+    const a = Math.random()*Math.PI*2;
+    const r = Math.random()*0.1;
+    particles.push(new Particle(
+      Math.cos(a)*r, -1.5, Math.sin(a)*r,
+      (Math.random()-0.5)*sp*0.5,
+      sp*(0.8+Math.random()*0.4),
+      (Math.random()-0.5)*sp*0.5,
+      80+Math.random()*120,
+      sz*(0.5+Math.random())
+    ));
+  }
+}
+
+function createExplosion(ox, oy, oz, count) {
+  const sp = parseFloat(speedSlider.value) * 0.05;
+  const sz = parseFloat(sizeSlider.value);
+  for (let i=0; i<count; i++) {
+    const theta = Math.random()*Math.PI*2;
+    const phi   = Math.acos(2*Math.random()-1);
+    const r = sp*(0.5+Math.random());
+    particles.push(new Particle(
+      ox, oy, oz,
+      r*Math.sin(phi)*Math.cos(theta),
+      r*Math.sin(phi)*Math.sin(theta),
+      r*Math.cos(phi),
+      40+Math.random()*60,
+      sz*(0.5+Math.random())
+    ));
+  }
+}
+
+function createGalaxy(count) {
+  const sz = parseFloat(sizeSlider.value);
+  for (let i=0; i<count; i++) {
+    const arm = Math.floor(Math.random()*3);
+    const r = 0.1 + Math.random()*1.5;
+    const angle = arm*(2*Math.PI/3) + r*2 + (Math.random()-0.5)*0.3;
+    const x = r*Math.cos(angle);
+    const z = r*Math.sin(angle);
+    const y = (Math.random()-0.5)*0.1;
+    const speed = 0.003 / (r+0.1);
+    particles.push(new Particle(
+      x, y, z,
+      -Math.sin(angle)*speed, 0, Math.cos(angle)*speed,
+      Infinity, sz*(0.3+Math.random()*0.7)
+    ));
+  }
+}
+
+function createRain(count) {
+  const sp = parseFloat(speedSlider.value) * 0.02;
+  const sz = parseFloat(sizeSlider.value);
+  for (let i=0; i<count; i++) {
+    particles.push(new Particle(
+      (Math.random()-0.5)*4, 2+Math.random()*2, (Math.random()-0.5)*4,
+      (Math.random()-0.5)*0.005, -sp*(0.8+Math.random()*0.4), (Math.random()-0.5)*0.005,
+      60+Math.random()*80,
+      sz*0.5
+    ));
+  }
+}
+
+function createVortex(count) {
+  const sz = parseFloat(sizeSlider.value);
+  for (let i=0; i<count; i++) {
+    const r = 0.2+Math.random()*1.5;
+    const angle = Math.random()*Math.PI*2;
+    const y = (Math.random()-0.5)*3;
+    const speed = 0.015/(r+0.1);
+    particles.push(new Particle(
+      r*Math.cos(angle), y, r*Math.sin(angle),
+      -Math.sin(angle)*speed, (Math.random()-0.5)*0.005, Math.cos(angle)*speed,
+      Infinity, sz*(0.3+Math.random()*0.7)
+    ));
+  }
+}
+
+function resetParticles() {
+  particles = [];
+  const count = parseInt(countSlider.value);
+  const mode  = modeSelect.value;
+  if (mode === "fountain")   createFountain(count);
+  else if (mode === "explosion") createExplosion(0,0,0,count);
+  else if (mode === "galaxy")    createGalaxy(count);
+  else if (mode === "rain")      createRain(count);
+  else if (mode === "vortex")    createVortex(count);
+}
+
+// ===== MATH =====
+function rotateVec(v) {
+  let { x, y, z } = v;
+  const cosX=Math.cos(rotX), sinX=Math.sin(rotX);
+  let y1=y*cosX-z*sinX, z1=y*sinX+z*cosX;
+  const cosY=Math.cos(rotY), sinY=Math.sin(rotY);
+  let x1=x*cosY+z1*sinY, z2=-x*sinY+z1*cosY;
+  return { x:x1, y:y1, z:z2 };
+}
+
+function project(v) {
+  const d=5, s=d/(d-v.z)*280;
+  return { x:v.x*s+canvas.width/2, y:-v.y*s+canvas.height/2, z:v.z };
+}
+
+// ===== RENDER =====
+function render(ts) {
+  frameCount++;
+  if (ts-lastTime>=1000) {
+    fps=frameCount; frameCount=0; lastTime=ts;
+    document.getElementById("statFps").textContent=fps;
+  }
+
+  const trail = parseFloat(trailSlider.value);
+  ctx.fillStyle = `rgba(13,13,15,${trail})`;
+  ctx.fillRect(0,0,canvas.width,canvas.height);
+
+  const grav  = parseFloat(gravSlider.value);
+  const speed = parseFloat(speedSlider.value);
+  const mode  = modeSelect.value;
+
+  // Refill continuous emitters
+  const maxCount = parseInt(countSlider.value);
+  if (mode === "fountain" && particles.filter(p=>p.alive).length < maxCount) {
+    createFountain(Math.min(10, maxCount - particles.filter(p=>p.alive).length));
+  }
+  if (mode === "rain" && particles.filter(p=>p.alive).length < maxCount) {
+    createRain(Math.min(10, maxCount - particles.filter(p=>p.alive).length));
+  }
+
+  // Update & draw
+  let alive = 0;
+  const sz = parseFloat(sizeSlider.value);
+
+  // Sort by Z for depth
+  const sorted = particles
+    .filter(p => p.alive)
+    .map(p => {
+      const rv = rotateVec(p);
+      const pv = project(rv);
+      return { p, pv };
+    })
+    .sort((a,b) => a.pv.z - b.pv.z);
+
+  for (const { p, pv } of sorted) {
+    p.update(grav, speed);
+    if (!p.alive) continue;
+    alive++;
+
+    const col = getColor(p.life, p.maxLife === Infinity ? 200 : p.maxLife);
+    const r = p.size * (0.5 + pv.z * 0.3);
+
+    ctx.beginPath();
+    ctx.arc(pv.x, pv.y, Math.max(0.5, r), 0, Math.PI*2);
+    ctx.fillStyle = col;
+    ctx.fill();
+  }
+
+  // Remove dead non-infinite particles
+  particles = particles.filter(p => p.alive || p.maxLife === Infinity);
+
+  document.getElementById("statParts").textContent = particles.length;
+  document.getElementById("statAlive").textContent = alive;
+
+  time++;
+  requestAnimationFrame(render);
+}
+
+resetParticles();
+requestAnimationFrame(render);
+</script>
+</body>
+</html>

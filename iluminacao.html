@@ -1,0 +1,397 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Iluminação Phong — Renderizador 3D</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<nav class="navbar">
+  <a href="index.html" class="brand">&#9650; Renderizador 3D</a>
+  <a href="wireframe.html">Wireframe OBJ</a>
+  <a href="primitivos.html">Primitivos</a>
+  <a href="iluminacao.html" class="active">Iluminação</a>
+  <a href="particulas.html">Partículas</a>
+  <a href="animacao.html">Animação</a>
+</nav>
+
+<div class="panel" style="top:62px; left:16px; width:230px;">
+  <h3>Iluminação Phong</h3>
+
+  <label>Forma</label>
+  <select id="shapeSelect">
+    <option value="sphere">Esfera</option>
+    <option value="cube">Cubo</option>
+    <option value="torus">Torus</option>
+    <option value="cylinder">Cilindro</option>
+  </select>
+
+  <label>Cor do objeto</label>
+  <input type="color" id="objColor" value="#7c3aed">
+
+  <label>Cor da luz</label>
+  <input type="color" id="lightColor" value="#ffffff">
+
+  <label>Luz ambiente: <span id="ambVal">0.15</span></label>
+  <input type="range" id="ambSlider" min="0" max="1" step="0.01" value="0.15">
+
+  <label>Luz difusa: <span id="diffVal">0.75</span></label>
+  <input type="range" id="diffSlider" min="0" max="1" step="0.01" value="0.75">
+
+  <label>Especular: <span id="specVal">0.60</span></label>
+  <input type="range" id="specSlider" min="0" max="1" step="0.01" value="0.60">
+
+  <label>Brilho especular: <span id="shineVal">32</span></label>
+  <input type="range" id="shineSlider" min="1" max="128" step="1" value="32">
+
+  <label>Luz X: <span id="lxVal">1.0</span></label>
+  <input type="range" id="lxSlider" min="-3" max="3" step="0.1" value="1">
+
+  <label>Luz Y: <span id="lyVal">2.0</span></label>
+  <input type="range" id="lySlider" min="-3" max="3" step="0.1" value="2">
+
+  <label>Luz Z: <span id="lzVal">2.0</span></label>
+  <input type="range" id="lzSlider" min="-3" max="3" step="0.1" value="2">
+
+  <button id="autoRotBtn" class="secondary">&#9654; Auto-rotação</button>
+  <button id="showLightBtn" class="secondary">&#9675; Mostrar luz</button>
+</div>
+
+<div class="stats">
+  Faces: <span id="statFaces">0</span><br>
+  FPS: <span id="statFps">0</span>
+</div>
+
+<div class="canvas-wrap">
+  <canvas id="canvas"></canvas>
+</div>
+
+<div class="badge">Arraste para rotacionar &nbsp;|&nbsp; Scroll para zoom</div>
+
+<script>
+const canvas = document.getElementById("canvas");
+const ctx = canvas.getContext("2d");
+
+function resize() {
+  canvas.width = canvas.parentElement.clientWidth;
+  canvas.height = canvas.parentElement.clientHeight;
+}
+resize();
+window.addEventListener("resize", resize);
+
+let vertices = [], faces = [], normals = [];
+let rotX = 0.4, rotY = 0.6, zoom = 1;
+let dragging = false, lastX = 0, lastY = 0;
+let autoRotate = false, showLight = false;
+let fps = 0, lastTime = performance.now(), frameCount = 0;
+
+// Controls
+const shapeSelect = document.getElementById("shapeSelect");
+const objColor    = document.getElementById("objColor");
+const lightColor  = document.getElementById("lightColor");
+const ambSlider   = document.getElementById("ambSlider");
+const diffSlider  = document.getElementById("diffSlider");
+const specSlider  = document.getElementById("specSlider");
+const shineSlider = document.getElementById("shineSlider");
+const lxSlider    = document.getElementById("lxSlider");
+const lySlider    = document.getElementById("lySlider");
+const lzSlider    = document.getElementById("lzSlider");
+
+function bindSlider(el, spanId) {
+  el.addEventListener("input", () => {
+    document.getElementById(spanId).textContent = parseFloat(el.value).toFixed(2);
+  });
+}
+bindSlider(ambSlider,   "ambVal");
+bindSlider(diffSlider,  "diffVal");
+bindSlider(specSlider,  "specVal");
+bindSlider(shineSlider, "shineVal");
+bindSlider(lxSlider,    "lxVal");
+bindSlider(lySlider,    "lyVal");
+bindSlider(lzSlider,    "lzVal");
+
+shapeSelect.addEventListener("change", rebuild);
+
+const autoRotBtn   = document.getElementById("autoRotBtn");
+const showLightBtn = document.getElementById("showLightBtn");
+autoRotBtn.addEventListener("click", () => {
+  autoRotate = !autoRotate;
+  autoRotBtn.textContent = autoRotate ? "⏹ Parar rotação" : "▶ Auto-rotação";
+  autoRotBtn.style.background = autoRotate ? "var(--accent)" : "";
+  autoRotBtn.style.color = autoRotate ? "#fff" : "";
+});
+showLightBtn.addEventListener("click", () => {
+  showLight = !showLight;
+  showLightBtn.textContent = showLight ? "● Ocultar luz" : "○ Mostrar luz";
+  showLightBtn.style.background = showLight ? "var(--accent3)" : "";
+  showLightBtn.style.color = showLight ? "#000" : "";
+});
+
+canvas.addEventListener("mousedown", e => { dragging = true; lastX = e.clientX; lastY = e.clientY; });
+window.addEventListener("mouseup", () => { dragging = false; });
+window.addEventListener("mousemove", e => {
+  if (!dragging) return;
+  rotY += (e.clientX - lastX) * 0.01;
+  rotX += (e.clientY - lastY) * 0.01;
+  lastX = e.clientX; lastY = e.clientY;
+});
+canvas.addEventListener("wheel", e => {
+  e.preventDefault();
+  zoom *= e.deltaY > 0 ? 0.95 : 1.05;
+  zoom = Math.max(0.2, Math.min(4, zoom));
+}, { passive: false });
+
+// ===== GEOMETRY =====
+function makeSphere(segs) {
+  const v = [], f = [], n = [];
+  for (let lat = 0; lat <= segs; lat++) {
+    const theta = lat * Math.PI / segs;
+    for (let lon = 0; lon <= segs; lon++) {
+      const phi = lon * 2 * Math.PI / segs;
+      const x = Math.sin(theta)*Math.cos(phi);
+      const y = Math.cos(theta);
+      const z = Math.sin(theta)*Math.sin(phi);
+      v.push({ x, y, z });
+      n.push({ x, y, z }); // sphere normals = positions
+    }
+  }
+  for (let lat = 0; lat < segs; lat++) {
+    for (let lon = 0; lon < segs; lon++) {
+      const a = lat*(segs+1)+lon, b = a+segs+1;
+      f.push([a, b, b+1, a+1]);
+    }
+  }
+  return { v, f, n };
+}
+
+function makeCube() {
+  const s = 1;
+  const v = [
+    {x:-s,y:-s,z:-s},{x:s,y:-s,z:-s},{x:s,y:s,z:-s},{x:-s,y:s,z:-s},
+    {x:-s,y:-s,z:s},{x:s,y:-s,z:s},{x:s,y:s,z:s},{x:-s,y:s,z:s}
+  ];
+  const f = [
+    [0,1,2,3],[7,6,5,4],[0,1,5,4],
+    [3,2,6,7],[0,3,7,4],[1,2,6,5]
+  ];
+  const faceNormals = [
+    {x:0,y:0,z:-1},{x:0,y:0,z:1},{x:0,y:-1,z:0},
+    {x:0,y:1,z:0},{x:-1,y:0,z:0},{x:1,y:0,z:0}
+  ];
+  const n = v.map(() => ({x:0,y:0,z:0}));
+  return { v, f, n: null, faceNormals };
+}
+
+function makeTorus(segs, tube) {
+  const R=0.7, r=0.3;
+  const v=[], f=[], n=[];
+  for (let i=0; i<=segs; i++) {
+    const u = i*2*Math.PI/segs;
+    for (let j=0; j<=tube; j++) {
+      const vv = j*2*Math.PI/tube;
+      const cx = R*Math.cos(u), cz = R*Math.sin(u);
+      const nx = Math.cos(vv)*Math.cos(u);
+      const ny = Math.sin(vv);
+      const nz = Math.cos(vv)*Math.sin(u);
+      v.push({ x: cx+r*nx, y: r*ny, z: cz+r*nz });
+      n.push({ x: nx, y: ny, z: nz });
+    }
+  }
+  for (let i=0; i<segs; i++) {
+    for (let j=0; j<tube; j++) {
+      const a=i*(tube+1)+j, b=a+tube+1;
+      f.push([a,b,b+1,a+1]);
+    }
+  }
+  return { v, f, n };
+}
+
+function makeCylinder(segs) {
+  const v=[], f=[], n=[];
+  v.push({x:0,y:1,z:0}); n.push({x:0,y:1,z:0});
+  v.push({x:0,y:-1,z:0}); n.push({x:0,y:-1,z:0});
+  for (let i=0; i<segs; i++) {
+    const a=i*2*Math.PI/segs;
+    const cx=Math.cos(a), cz=Math.sin(a);
+    v.push({x:cx,y:1,z:cz}); n.push({x:cx,y:0,z:cz});
+    v.push({x:cx,y:-1,z:cz}); n.push({x:cx,y:0,z:cz});
+  }
+  for (let i=0; i<segs; i++) {
+    const ni=(i+1)%segs;
+    const t0=2+i*2, t1=2+ni*2, b0=t0+1, b1=t1+1;
+    f.push([0,t0,t1]);
+    f.push([1,b1,b0]);
+    f.push([t0,b0,b1,t1]);
+  }
+  return { v, f, n };
+}
+
+function rebuild() {
+  const s = shapeSelect.value;
+  let geo;
+  if (s === "sphere")   geo = makeSphere(20);
+  else if (s === "cube")     geo = makeCube();
+  else if (s === "torus")    geo = makeTorus(24, 12);
+  else if (s === "cylinder") geo = makeCylinder(24);
+  vertices = geo.v; faces = geo.f; normals = geo.n;
+  document.getElementById("statFaces").textContent = faces.length;
+}
+
+// ===== MATH =====
+function rotateVec(v) {
+  let { x, y, z } = v;
+  const cosX=Math.cos(rotX), sinX=Math.sin(rotX);
+  let y1=y*cosX-z*sinX, z1=y*sinX+z*cosX;
+  const cosY=Math.cos(rotY), sinY=Math.sin(rotY);
+  let x1=x*cosY+z1*sinY, z2=-x*sinY+z1*cosY;
+  return { x:x1, y:y1, z:z2 };
+}
+
+function project(v) {
+  const d=4, s=d/(d-v.z)*300*zoom;
+  return { x:v.x*s+canvas.width/2, y:-v.y*s+canvas.height/2, z:v.z };
+}
+
+function normalize(v) {
+  const l=Math.sqrt(v.x*v.x+v.y*v.y+v.z*v.z)||1;
+  return { x:v.x/l, y:v.y/l, z:v.z/l };
+}
+
+function dot(a, b) { return a.x*b.x+a.y*b.y+a.z*b.z; }
+
+function reflect(l, n) {
+  const d = 2*dot(l,n);
+  return { x:d*n.x-l.x, y:d*n.y-l.y, z:d*n.z-l.z };
+}
+
+function hexToRgb(hex) {
+  return {
+    r: parseInt(hex.slice(1,3),16)/255,
+    g: parseInt(hex.slice(3,5),16)/255,
+    b: parseInt(hex.slice(5,7),16)/255
+  };
+}
+
+function computeFaceNormal(pts) {
+  if (pts.length < 3) return {x:0,y:1,z:0};
+  const a=pts[0], b=pts[1], c=pts[2];
+  const ux=b.x-a.x, uy=b.y-a.y, uz=b.z-a.z;
+  const vx=c.x-a.x, vy=c.y-a.y, vz=c.z-a.z;
+  return normalize({
+    x: uy*vz-uz*vy,
+    y: uz*vx-ux*vz,
+    z: ux*vy-uy*vx
+  });
+}
+
+// ===== RENDER =====
+function render(ts) {
+  frameCount++;
+  if (ts-lastTime>=1000) {
+    fps=frameCount; frameCount=0; lastTime=ts;
+    document.getElementById("statFps").textContent=fps;
+  }
+
+  if (autoRotate) { rotY+=0.01; }
+
+  ctx.fillStyle="#0d0d0f";
+  ctx.fillRect(0,0,canvas.width,canvas.height);
+
+  const amb  = parseFloat(ambSlider.value);
+  const diff = parseFloat(diffSlider.value);
+  const spec = parseFloat(specSlider.value);
+  const shine= parseFloat(shineSlider.value);
+
+  const lx = parseFloat(lxSlider.value);
+  const ly = parseFloat(lySlider.value);
+  const lz = parseFloat(lzSlider.value);
+  const lightDir = normalize({x:lx, y:ly, z:lz});
+
+  const objCol   = hexToRgb(objColor.value);
+  const lightCol = hexToRgb(lightColor.value);
+
+  const rotated   = vertices.map(v => rotateVec(v));
+  const projected = rotated.map(v => project(v));
+
+  // Painter's algorithm
+  const sortedFaces = faces.map((face,i) => {
+    let avgZ=0;
+    for (const idx of face) avgZ+=rotated[idx].z;
+    return { face, idx:i, avgZ: avgZ/face.length };
+  }).sort((a,b)=>a.avgZ-b.avgZ);
+
+  const camDir = normalize({x:0,y:0,z:-1});
+
+  for (const { face, idx } of sortedFaces) {
+    const pts3d = face.map(i=>rotated[i]);
+    const pts2d = face.map(i=>projected[i]);
+
+    // Compute normal
+    let n;
+    if (normals) {
+      // Average vertex normals
+      let nx=0,ny=0,nz=0;
+      for (const i of face) {
+        const rn = rotateVec(normals[i]);
+        nx+=rn.x; ny+=rn.y; nz+=rn.z;
+      }
+      n = normalize({x:nx/face.length, y:ny/face.length, z:nz/face.length});
+    } else {
+      n = computeFaceNormal(pts3d);
+    }
+
+    // Phong shading
+    const diffFactor = Math.max(0, dot(n, lightDir));
+
+    // Specular (Blinn-Phong half-vector)
+    const halfVec = normalize({
+      x: lightDir.x + camDir.x,
+      y: lightDir.y + camDir.y,
+      z: lightDir.z + camDir.z
+    });
+    const specFactor = Math.pow(Math.max(0, dot(n, halfVec)), shine);
+
+    const r = Math.min(255, Math.round((amb*objCol.r + diff*diffFactor*objCol.r*lightCol.r + spec*specFactor*lightCol.r)*255));
+    const g = Math.min(255, Math.round((amb*objCol.g + diff*diffFactor*objCol.g*lightCol.g + spec*specFactor*lightCol.g)*255));
+    const b = Math.min(255, Math.round((amb*objCol.b + diff*diffFactor*objCol.b*lightCol.b + spec*specFactor*lightCol.b)*255));
+
+    ctx.fillStyle = `rgb(${r},${g},${b})`;
+    ctx.beginPath();
+    pts2d.forEach((p,i) => i===0 ? ctx.moveTo(p.x,p.y) : ctx.lineTo(p.x,p.y));
+    ctx.closePath();
+    ctx.fill();
+  }
+
+  // Draw light indicator
+  if (showLight) {
+    const lPos = project(rotateVec({x:lx*0.5,y:ly*0.5,z:lz*0.5}));
+    const lc = lightColor.value;
+    ctx.beginPath();
+    ctx.arc(lPos.x, lPos.y, 10, 0, Math.PI*2);
+    ctx.fillStyle = lc;
+    ctx.fill();
+    ctx.strokeStyle = "#fff";
+    ctx.lineWidth = 1;
+    ctx.stroke();
+    // Rays
+    for (let a=0; a<8; a++) {
+      const angle = a*Math.PI/4;
+      ctx.beginPath();
+      ctx.moveTo(lPos.x+12*Math.cos(angle), lPos.y+12*Math.sin(angle));
+      ctx.lineTo(lPos.x+20*Math.cos(angle), lPos.y+20*Math.sin(angle));
+      ctx.strokeStyle = lc;
+      ctx.lineWidth = 1.5;
+      ctx.stroke();
+    }
+  }
+
+  requestAnimationFrame(render);
+}
+
+rebuild();
+requestAnimationFrame(render);
+</script>
+</body>
+</html>
