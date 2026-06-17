@@ -88,7 +88,7 @@ window.addEventListener("mousemove", e => {
 });
 
 window.addEventListener("load", async () => {
-    const text = await fetch("./pav.obj")
+    const text = await fetch("https://raw.githubusercontent.com/Ezequias-Rodrigues/Renderizador3D/refs/heads/main/pav.obj")
         .then(r => r.text());
 
     loadOBJ(text);
