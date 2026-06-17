@@ -1,0 +1,274 @@
+  <!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Renderizador de Objs</title>
+
+<style>
+html, body {
+    margin: 0;
+    height: 100%;
+    background: #111;
+    overflow: hidden;
+    font-family: Arial, sans-serif;
+}
+
+#toolbar {
+    position: absolute;
+    top: 10px;
+    left: 10px;
+    z-index: 10;
+    background: rgba(0,0,0,0.7);
+    padding: 10px;
+    border-radius: 8px;
+}
+
+canvas {
+    display: block;
+    width: 100vw;
+    height: 100vh;
+}
+
+input {
+    color: white;
+}
+</style>
+</head>
+<body>
+
+<div id="toolbar">
+    <input type="file" id="fileInput" accept=".obj">
+</div>
+
+<canvas id="canvas"></canvas>
+
+<script>
+const canvas = document.getElementById("canvas");
+const ctx = canvas.getContext("2d");
+
+function resize() {
+    canvas.width = window.innerWidth;
+    canvas.height = window.innerHeight;
+}
+resize();
+window.addEventListener("resize", resize);
+
+let vertices = [];
+let faces = [];
+
+let rotX = 0;
+let rotY = 0;
+
+let dragging = false;
+let lastX = 0;
+let lastY = 0;
+
+canvas.addEventListener("mousedown", e => {
+    dragging = true;
+    lastX = e.clientX;
+    lastY = e.clientY;
+});
+
+window.addEventListener("mouseup", () => {
+    dragging = false;
+});
+
+window.addEventListener("mousemove", e => {
+    if (!dragging) return;
+
+    const dx = e.clientX - lastX;
+    const dy = e.clientY - lastY;
+
+    rotY += dx * 0.01;
+    rotX += dy * 0.01;
+
+    lastX = e.clientX;
+    lastY = e.clientY;
+});
+
+window.addEventListener("load", async () => {
+    const text = await fetch("./pav.obj")
+        .then(r => r.text());
+
+    loadOBJ(text);
+});
+async function loadOBJFromURL(path) {
+    const response = await fetch(path);
+
+    if (!response.ok) {
+        throw new Error(`Failed to load: ${path}`);
+    }
+
+    const text = await response.text();
+    loadOBJ(text);
+}
+function loadOBJ(text) {
+    vertices = [];
+    faces = [];
+
+    const lines = text.split("\n");
+
+    for (let line of lines) {
+        line = line.trim();
+
+        if (line.startsWith("v ")) {
+            const parts = line.split(/\s+/);
+
+            vertices.push({
+                x: parseFloat(parts[1]),
+                y: parseFloat(parts[2]),
+                z: parseFloat(parts[3])
+            });
+        }
+
+        else if (line.startsWith("f ")) {
+            const parts = line.split(/\s+/).slice(1);
+
+            const face = parts.map(p =>
+                parseInt(p.split("/")[0]) - 1
+            );
+
+            faces.push(face);
+        }
+    }
+
+    normalizeModel();
+}
+const step_size = 1
+function normalizeModel() {
+    if (vertices.length === 0) return;
+
+    let minX = Infinity,
+        minY = Infinity,
+        minZ = Infinity;
+
+    let maxX = -Infinity,
+        maxY = -Infinity,
+        maxZ = -Infinity;
+    
+    for (i = 0; i < vertices.length; i += step_size) {
+        v = vertices[i];
+  
+        minX = Math.min(minX, v.x);
+        minY = Math.min(minY, v.y);
+        minZ = Math.min(minZ, v.z);
+
+        maxX = Math.max(maxX, v.x);
+        maxY = Math.max(maxY, v.y);
+        maxZ = Math.max(maxZ, v.z);
+    }
+
+    const cx = (minX + maxX) / 2;
+    const cy = (minY + maxY) / 2;
+    const cz = (minZ + maxZ) / 2;
+
+    const size = Math.max(
+        maxX - minX,
+        maxY - minY,
+        maxZ - minZ
+    );
+
+    for (i = 0; i < vertices.length; i += step_size) {
+        v = vertices[i];
+        v.x = (v.x - cx) / size * 2;
+        v.y = (v.y - cy) / size * 2;
+        v.z = (v.z - cz) / size * 2;
+    }
+}
+
+function rotateVertex(v) {
+
+    let x = v.x;
+    let y = v.y;
+    let z = v.z;
+
+    const cosX = Math.cos(rotX);
+    const sinX = Math.sin(rotX);
+
+    let y1 = y * cosX - z * sinX;
+    let z1 = y * sinX + z * cosX;
+
+    y = y1;
+    z = z1;
+
+    const cosY = Math.cos(rotY);
+    const sinY = Math.sin(rotY);
+
+    let x1 = x * cosY + z * sinY;
+    let z2 = -x * sinY + z * cosY;
+
+    return { x: x1, y, z: z2 };
+}
+
+function project(v) {
+
+    const distance = 4;
+
+    const scale = distance / (distance - v.z);
+
+    return {
+        x: v.x * scale * 300 + canvas.width / 2,
+        y: -v.y * scale * 300 + canvas.height / 2
+    };
+}
+function hsvToHex(h, s, v) {
+  // Normalize saturation and value to 0-1 range
+  s /= 100;
+  v /= 100;
+
+  // Calculate RGB values based on HSV math
+  const f = (n) => {
+    const k = (n + h / 60) % 6;
+    const color = v - v * s * Math.max(0, Math.min(k, 4 - k, 1));
+    
+    // Convert to 0-255 range, then to Hex, and pad with leading zero
+    return Math.round(color * 255)
+      .toString(16)
+      .padStart(2, '0');
+  };
+
+  return `#${f(5)}${f(3)}${f(1)}`;
+}
+let h = 0
+function render() {
+
+    ctx.fillStyle = "#111";
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    ctx.strokeStyle = hsvToHex(h, 100,100)
+    h ++;
+    ctx.lineWidth = 0.1;
+
+    const transformed = vertices.map(v =>
+        project(rotateVertex(v))
+    );
+
+    for (const face of faces) {
+
+        ctx.beginPath();
+
+        for (let i = 0; i < face.length; i++) {
+
+            const p = transformed[face[i]];
+
+            if (i === 0)
+                ctx.moveTo(p.x, p.y);
+            else
+                ctx.lineTo(p.x, p.y);
+        }
+
+        const first = transformed[face[0]];
+        ctx.lineTo(first.x, first.y);
+
+        ctx.stroke();
+    }
+
+    requestAnimationFrame(render);
+}
+
+render();
+</script>
+
+</body>
+</html>
